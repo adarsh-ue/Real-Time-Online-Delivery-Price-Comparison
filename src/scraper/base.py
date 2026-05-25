@@ -62,21 +62,44 @@ class BaseScraper:
     delivery_mins = None   # subclasses set this to a real estimate
 
     def __init__(self, log_callback: Callable):
-        self.log = log_callback
+        self.log      = log_callback
+        self._pincode = ""   # set by scrape() before calling _fetch()
 
     # ── called by manager ──────────────────────────────────────────────────────
-    def scrape(self, query: str, driver: webdriver.Chrome) -> List[Dict]:
+    def scrape(self, query: str, driver: webdriver.Chrome,
+               pincode: str = "", screenshot_dir: str = "") -> List[Dict]:
+        self._pincode = pincode
         self.log(f"\n  ── {self.platform} ──")
         t0 = time.time()
         try:
             results = self._fetch(query, driver)
+            # Screenshot after fetch — captures the live search results page
+            if screenshot_dir:
+                self._save_screenshot(driver, screenshot_dir)
             elapsed = round(time.time() - t0, 2)
             self.log(f"  [{self.platform}] ✅ {len(results)} products  ({elapsed}s)")
             return results
         except Exception as e:
+            # Try screenshot even on failure (shows the error/blocked page)
+            if screenshot_dir:
+                try: self._save_screenshot(driver, screenshot_dir)
+                except Exception: pass
             elapsed = round(time.time() - t0, 2)
             self.log(f"  [{self.platform}] ❌ {type(e).__name__}: {str(e)[:80]}  ({elapsed}s)")
             return []
+
+    def _save_screenshot(self, driver: webdriver.Chrome, screenshot_dir: str) -> str:
+        """Take a full-page screenshot of the current browser state."""
+        try:
+            os.makedirs(screenshot_dir, exist_ok=True)
+            slug = re.sub(r"[^\w]", "_", self.platform.lower())
+            path = os.path.join(screenshot_dir, f"{slug}.png")
+            driver.save_screenshot(path)
+            self.log(f"  [{self.platform}] 📸 Screenshot saved")
+            return path
+        except Exception as e:
+            self.log(f"  [{self.platform}] Screenshot skipped: {e}")
+            return ""
 
     # ── subclasses override this ───────────────────────────────────────────────
     def _fetch(self, query: str, driver: webdriver.Chrome) -> List[Dict]:
@@ -117,26 +140,103 @@ class BaseScraper:
         except ValueError:
             return None
 
+    # ── Size/unit extraction ───────────────────────────────────────────────────
+    _SIZE_RE = re.compile(
+        r"(?<!\w)"                             # not preceded by a letter/digit
+        r"(\d+(?:\.\d+)?)"                     # number (int or decimal)
+        r"\s*"                                 # optional space
+        r"(kg|grams?|gms?|g"                   # weight: kg first, then g variants
+        r"|litres?|liters?|lit|l"              # volume large: long forms before bare l
+        r"|ml)"                                # volume small
+        r"(?!\w)",                             # not followed by a letter/digit
+        flags=re.I,
+    )
+
+    @classmethod
+    def _extract_size(cls, product_name: str) -> tuple:
+        """
+        Parse size/weight/volume from a product name string.
+        Returns (quantity_str, unit_str, size_label_str).
+        e.g. 'Amul Milk 500 ml'  → ('500', 'ml',  '500ml')
+             'Sugar 1 kg'         → ('1',   'kg',  '1kg')
+             'Eggs 12 pcs'        → ('12',  'pcs', '12 pcs')
+             'Plain Yogurt'       → ('1',   'pcs', '')
+        """
+        m = cls._SIZE_RE.search(product_name)
+        if m:
+            qty_str  = m.group(1)
+            raw_unit = m.group(2).lower()
+            # Normalise to canonical unit
+            if raw_unit == "kg":
+                unit = "kg"
+            elif raw_unit in ("g", "gm", "gms", "gram", "grams"):
+                unit = "g"
+            elif raw_unit in ("l", "lit", "litre", "liter", "litres", "liters"):
+                unit = "l"
+            elif raw_unit == "ml":
+                unit = "ml"
+            else:
+                unit = raw_unit
+            label = f"{qty_str}{unit}"
+            return (qty_str, unit, label)
+
+        # Try pcs / pack pattern (e.g. "6 pcs", "pack of 12")
+        pcs_m = re.search(r"(?:pack\s+of\s+|x\s*)?(\d+)\s*(?:pcs?|pieces?|eggs?|units?)",
+                          product_name, re.I)
+        if pcs_m:
+            qty_str = pcs_m.group(1)
+            return (qty_str, "pcs", f"{qty_str} pcs")
+
+        return ("1", "pcs", "")
+
     def _build(self, product_name: str, price: float,
-               brand: str = "", description: str = "") -> Dict:
+               brand: str = "", description: str = "",
+               mrp: float = 0.0) -> Dict:
         """Return a standardised product record — only real fields."""
+        name = product_name.strip()[:120]
+
+        # Auto-extract size from product name if not caller-supplied
+        qty_str, unit, size_label = self._extract_size(name)
+        qty = float(qty_str)
+
+        # Price per unit
+        try:
+            p = float(price)
+            u = unit.lower()
+            if u == "g":     ppu = round(p / qty * 100, 2)   # per 100g
+            elif u == "kg":  ppu = round(p / (qty * 1000) * 100, 2)
+            elif u == "ml":  ppu = round(p / qty * 100, 2)   # per 100ml
+            elif u == "l":   ppu = round(p / (qty * 1000) * 100, 2)
+            else:            ppu = round(p / qty, 2)          # per pc
+        except Exception:
+            ppu = round(price, 2)
+
+        # Unit display label
+        u = unit.lower()
+        if u in ("g", "kg"):    unit_norm = "per 100g"
+        elif u in ("ml", "l"):  unit_norm = "per 100mL"
+        else:                   unit_norm = "per pc"
+
+        # MRP / discount
+        effective_mrp = mrp if mrp and mrp > price else price
+        disc = round((effective_mrp - price) / effective_mrp * 100, 1) if effective_mrp > price else 0.0
+
         return {
-            "platform":     self.platform,
-            "product_name": product_name.strip()[:120],
-            "price":        round(price, 2),
-            "brand":        brand.strip()[:60],
-            "description":  description.strip()[:200],
-            "source":       "LIVE",
-            "scraped_at":   datetime.now().isoformat(),
-            # pipeline fields (SparkProcessor will fill rank/savings)
-            "mrp":          round(price, 2),
-            "discount_pct": 0.0,
-            "quantity":     "1",
-            "unit":         "pcs",
-            "size_label":   "",
-            "price_per_unit": round(price, 2),
-            "unit_norm":    "per pc",
-            "delivery_mins": self.delivery_mins,
-            "in_stock":     True,
-            "pincode":      "",
+            "platform":       self.platform,
+            "product_name":   name,
+            "price":          round(price, 2),
+            "brand":          brand.strip()[:60],
+            "description":    description.strip()[:200],
+            "source":         "LIVE",
+            "scraped_at":     datetime.now().isoformat(),
+            "mrp":            round(effective_mrp, 2),
+            "discount_pct":   disc,
+            "quantity":       qty_str,
+            "unit":           unit,
+            "size_label":     size_label,
+            "price_per_unit": ppu,
+            "unit_norm":      unit_norm,
+            "delivery_mins":  self.delivery_mins,
+            "in_stock":       True,
+            "pincode":        "",
         }

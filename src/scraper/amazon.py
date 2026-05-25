@@ -67,18 +67,26 @@ class AmazonScraper(BaseScraper):
 
         # ── Price ─────────────────────────────────────────────────────────────
         price = None
+        mrp   = 0.0
 
-        # Best source: .a-offscreen (e.g. "₹65.00" in a screen-reader span)
-        offscreen = card.select(".a-offscreen")
-        for o in offscreen:
-            t = o.get_text(strip=True)
-            p = self._clean_price(t)
-            if p and p > 1:
-                price = p
-                break
+        # Amazon renders two .a-price containers:
+        #  1st = selling price, 2nd = MRP (has aria-label "M.R.P." or "was")
+        price_containers = card.select(".a-price")
+        prices_found = []
+        for pc in price_containers:
+            offscreen = pc.select_one(".a-offscreen")
+            if offscreen:
+                p = self._clean_price(offscreen.get_text(strip=True))
+                if p and p > 1:
+                    prices_found.append(p)
 
-        # Fallback: whole.fraction spans
-        if not price:
+        if len(prices_found) >= 2:
+            price = min(prices_found)   # selling price is the lower one
+            mrp   = max(prices_found)   # MRP is the higher one
+        elif len(prices_found) == 1:
+            price = prices_found[0]
+        else:
+            # Fallback: whole.fraction spans
             whole = card.select_one(".a-price-whole")
             if whole:
                 w = whole.get_text(strip=True).replace(",", "").rstrip(".")
@@ -103,4 +111,4 @@ class AmazonScraper(BaseScraper):
                      if len(b.get_text(strip=True)) > 5]
             desc = " | ".join(parts)[:200]
 
-        return self._build(name, price, brand=brand, description=desc)
+        return self._build(name, price, brand=brand, description=desc, mrp=mrp)

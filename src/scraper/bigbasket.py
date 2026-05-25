@@ -87,13 +87,34 @@ class BigBasketScraper(BaseScraper):
         bi    = item.get("brand") or {}
         brand = bi.get("name", "") if isinstance(bi, dict) else str(bi)
         desc  = item.get("desc") or item.get("description") or ""
+        mrp_raw = item.get("mrp") or item.get("market_price") or item.get("original_price")
+
         price = self._clean_price(str(price)) if price else None
+        mrp   = self._clean_price(str(mrp_raw)) if mrp_raw else 0.0
         if not price or not name:
             return None
-        rec = self._build(str(name), price, brand=str(brand), description=str(desc))
+
+        rec = self._build(str(name), price, brand=str(brand), description=str(desc),
+                          mrp=mrp or 0.0)
+        # Override size_label with the BigBasket pack field if present
         qty = item.get("w") or item.get("pack_desc") or ""
         if qty:
             rec["size_label"] = str(qty)[:30]
+            # Re-parse quantity/unit from the pack descriptor for accurate ppu
+            qs, ut, _ = self._extract_size(str(qty))
+            rec["quantity"] = qs
+            rec["unit"]     = ut
+            # Recalculate ppu
+            try:
+                p  = float(price);  q = float(qs)
+                u  = ut.lower()
+                if u == "g":     rec["price_per_unit"] = round(p / q * 100, 2)
+                elif u == "kg":  rec["price_per_unit"] = round(p / (q*1000) * 100, 2)
+                elif u == "ml":  rec["price_per_unit"] = round(p / q * 100, 2)
+                elif u == "l":   rec["price_per_unit"] = round(p / (q*1000) * 100, 2)
+                elif u == "pcs": rec["price_per_unit"] = round(p / q, 2)
+            except Exception:
+                pass
         return rec
 
     # ── HTML price-walk ────────────────────────────────────────────────────────

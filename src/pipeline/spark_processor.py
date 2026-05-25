@@ -34,6 +34,15 @@ class SparkProcessor:
             # Also need Java
             java = os.popen("java -version 2>&1").read()
             if "version" in java.lower():
+                # Set PYSPARK_PYTHON so Spark finds the right interpreter
+                import sys
+                os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+                os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+                # Set HADOOP_HOME for winutils (suppresses Windows warnings)
+                import pathlib
+                hadoop_home = pathlib.Path.home() / "hadoop"
+                if hadoop_home.exists():
+                    os.environ.setdefault("HADOOP_HOME", str(hadoop_home))
                 return True
         except ImportError:
             pass
@@ -64,13 +73,15 @@ class SparkProcessor:
         from pyspark.sql.window import Window
         from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, BooleanType
 
-        self.log("  [Spark] Creating SparkSession (local[*])...")
+        self.log("  [Spark] Creating SparkSession (local[2])...")
         spark = (
             SparkSession.builder
             .appName("PriceCompare")
-            .master("local[*]")
+            .master("local[2]")
             .config("spark.sql.shuffle.partitions", "4")
             .config("spark.driver.memory", "1g")
+            .config("spark.python.worker.reuse", "true")
+            .config("spark.ui.enabled", "false")
             .getOrCreate()
         )
         spark.sparkContext.setLogLevel("ERROR")
@@ -154,7 +165,6 @@ class SparkProcessor:
         df = df.sort_values(["product_name", "size_label", "rank"])
         rows = df.to_dict(orient="records")
         self.log(f"  [Pandas] ✅ Processing complete — {len(rows)} records")
-        self.log(f"  [Pandas] TIP: Install Java 11 + pyspark for real Spark engine")
         return rows
 
     # ── Helpers ────────────────────────────────────────────────────────────────

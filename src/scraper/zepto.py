@@ -2,88 +2,214 @@
 zepto.py
 --------
 Zepto Selenium scraper.
-URL: https://www.zeptonow.com/search?query={query}
-Zepto has strong anti-bot. Selenium gives us the best chance.
+
+Key findings (live diagnostic):
+  - Real domain: zepto.com  (NOT zeptonow.com — that redirects here)
+  - Location is stored in localStorage key: "user-position"
+  - Structure: {"state":{"userPosition":{...},"userGpsCoords":{lat,lng},...}}
+  - Injecting Bangalore coords before loading search → 86+ price elements appear
+
+Strategy:
+  1. Load https://www.zepto.com/ to seed cookies/session
+  2. Inject latitude/longitude for user's pincode into localStorage
+  3. Navigate to https://www.zepto.com/search?query={query}
+  4. Parse product cards from rendered HTML
 """
 
 import re
-from typing import List, Dict
+import json
+import time
+from datetime import datetime
+from typing import List, Dict, Optional
 
 from selenium import webdriver
+from selenium.webdriver.common.by import By
+from bs4 import BeautifulSoup
+
 from .base import BaseScraper
 
-SEARCH_URL = "https://www.zeptonow.com/search?query={query}"
+HOMEPAGE   = "https://www.zepto.com/"
+SEARCH_URL = "https://www.zepto.com/search?query={query}"
+
+# Pincode prefix → (lat, lng, place_id, description)
+_LOCATION = {
+    "560": (12.9716, 77.5946, "ChIJbU60yXAWrjsR4E9-UejD3_g", "Bangalore, Karnataka, India"),
+    "562": (12.9716, 77.5946, "ChIJbU60yXAWrjsR4E9-UejD3_g", "Bangalore, Karnataka, India"),
+    "110": (28.6139, 77.2090, "ChIJLbZ-efUCDTkRzWe1mMOeKKM", "New Delhi, Delhi, India"),
+    "122": (28.4595, 77.0266, "ChIJ0X31pIkEDTkRZiVa7LTaLuA", "Gurugram, Haryana, India"),
+    "201": (28.5355, 77.3910, "ChIJezVzMaTlDDkRP8B8yDDO_zc", "Noida, Uttar Pradesh, India"),
+    "400": (19.0760, 72.8777, "ChIJwe1EZjDG5zsRmKl57UfxfEA", "Mumbai, Maharashtra, India"),
+    "401": (19.0760, 72.8777, "ChIJwe1EZjDG5zsRmKl57UfxfEA", "Mumbai, Maharashtra, India"),
+    "411": (18.5204, 73.8567, "ChIJARFGZy6_wjsRQ-Kcrmn_aPs", "Pune, Maharashtra, India"),
+    "500": (17.3850, 78.4867, "ChIJx9Lr6tqZyzsRwuu6hwd9abM", "Hyderabad, Telangana, India"),
+    "600": (13.0827, 80.2707, "ChIJYeZuBI9WUjoRM9MI6UYXAQs", "Chennai, Tamil Nadu, India"),
+    "700": (22.5726, 88.3639, "ChIJZ_YISduC-DkRvCxsj-Yw40M", "Kolkata, West Bengal, India"),
+    "380": (23.0225, 72.5714, "ChIJSdRbuoqEXjkRFmVPYRHdzk8", "Ahmedabad, Gujarat, India"),
+    "302": (26.9124, 75.7873, "ChIJD4CXMwCXdDkRMxMixNrwTHE", "Jaipur, Rajasthan, India"),
+    "226": (26.8467, 80.9462, "ChIJr3YSj2Sa7zkRpFjlLmDHcwA", "Lucknow, Uttar Pradesh, India"),
+    "160": (30.7333, 76.7794, "ChIJi3ksM3fUGTkRlkfTGqitOkM", "Chandigarh, India"),
+    "452": (22.7196, 75.8577, "ChIJCf_kFhVkfDkRW4bTsDVS8iw", "Indore, Madhya Pradesh, India"),
+}
+_DEFAULT = (12.9716, 77.5946, "ChIJbU60yXAWrjsR4E9-UejD3_g", "Bangalore, Karnataka, India")
 
 
 class ZeptoScraper(BaseScraper):
     platform      = "Zepto"
-    delivery_mins = 10   # Zepto ~10 min
+    delivery_mins = 10
 
     def _fetch(self, query: str, driver: webdriver.Chrome) -> List[Dict]:
-        url  = SEARCH_URL.format(query=query.replace(" ", "+"))
-        soup = self._get_page(driver, url,
-                              wait_selector="[class*='product'],[class*='Product'],[class*='item']",
-                              timeout=22)
+        lat, lng, place_id, description = _LOCATION.get(self._pincode[:3], _DEFAULT)
 
-        page_src = driver.page_source.lower()
-        if any(k in page_src for k in ["set location", "allow location",
-                                        "login", "captcha", "403", "blocked"]):
-            self.log("  [Zepto] ⚠️  Location/login/captcha wall detected")
+        # ── Step 1: Load homepage to seed cookies ─────────────────────────────
+        self.log(f"  [Zepto] → {HOMEPAGE} (seeding session)")
+        driver.get(HOMEPAGE)
+        time.sleep(3)
 
-        # Try __NEXT_DATA__
-        nd = self._next_data(driver)
-        if nd:
-            res = self._walk(nd)
-            if res:
-                return res
+        # ── Step 2: Inject location into localStorage ─────────────────────────
+        location_payload = {
+            "state": {
+                "userPosition": {
+                    "place_id": place_id,
+                    "description": description,
+                    "structured_formatting": {
+                        "main_text": description.split(",")[0],
+                        "secondary_text": ", ".join(description.split(",")[1:]).strip()
+                    }
+                },
+                "userGpsCoords": {"latitude": lat, "longitude": lng},
+                "userGpsCoordsUpdatedAt": int(datetime.now().timestamp() * 1000),
+                "_hasHydrated": True
+            },
+            "version": 0
+        }
+        driver.execute_script(
+            "localStorage.setItem('user-position', arguments[0])",
+            json.dumps(location_payload)
+        )
+        self.log(f"  [Zepto] 📍 Location set: {description}")
 
-        return self._html_prices(soup)
+        # ── Step 3: Load search page ──────────────────────────────────────────
+        url = SEARCH_URL.format(query=query.replace(" ", "+"))
+        self.log(f"  [Zepto] → {url}")
+        driver.get(url)
+        time.sleep(8)   # Zepto React hydration takes longer than most sites
 
-    def _walk(self, nd) -> List[Dict]:
+        # Re-inject location after page load (Next.js might reset localStorage)
+        driver.execute_script(
+            "localStorage.setItem('user-position', arguments[0])",
+            json.dumps(location_payload)
+        )
+        # Reload once more so React picks up the injected location
+        driver.get(url)
+        time.sleep(6)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        results = self._parse(soup)
+
+        if not results:
+            self.log("  [Zepto] HTML parse got 0 — trying __NEXT_DATA__")
+            nd = self._next_data(driver)
+            if nd:
+                results = self._walk_nd(nd)
+
+        if results:
+            self.log(f"  [Zepto] {len(results)} products parsed")
+        else:
+            self.log("  [Zepto] 0 products — location may not be serviceable")
+        return results
+
+    # ── HTML parser ───────────────────────────────────────────────────────────
+    def _parse(self, soup: BeautifulSoup) -> List[Dict]:
+        """
+        Zepto renders product cards. Each card typically has:
+          - A name element (h4, p, span with product name)
+          - A price element with ₹
+          - Optionally a weight/size text
+        """
+        results: List[Dict] = []
+        seen: set = set()
+
+        # Strategy A: find price elements and walk up to product card
+        # NOTE: use get_text() not t.string — React nests spans inside price elements
+        # so t.string is None even when the visible text contains ₹
+        price_els = [
+            t for t in soup.find_all(["span", "div", "p"])
+            if not t.find(["span","div","p"])  # leaf-ish elements only
+            and re.search(r"₹\s*\d+", t.get_text(strip=True))
+        ]
+
+        for pel in price_els[:60]:
+            price_val = self._clean_price(pel.get_text(strip=True))
+            if not price_val or price_val < 1:
+                continue
+
+            # Walk up to find name and optional MRP
+            card = pel
+            name = ""
+            mrp  = 0.0
+            for _ in range(12):
+                card = card.parent
+                if card is None:
+                    break
+                # Look for name in heading or data-testid or class-named element
+                ne = (
+                    card.find("h4") or card.find("h3") or card.find("h2") or
+                    card.find(attrs={"data-testid": re.compile(r"name|title|product", re.I)}) or
+                    card.find(attrs={"class": re.compile(r"name|title|product|item", re.I)})
+                )
+                if ne:
+                    candidate = ne.get_text(strip=True)
+                    if len(candidate) > 3 and not re.match(r"^₹", candidate):
+                        name = candidate
+                        break
+
+                # Also check sibling price elements for MRP (usually > selling price)
+                if not mrp:
+                    all_prices = re.findall(r"₹\s*(\d+(?:\.\d+)?)", card.get_text())
+                    all_p = [float(x) for x in all_prices if float(x) > 0]
+                    if len(all_p) >= 2:
+                        max_p = max(all_p)
+                        if max_p > price_val:
+                            mrp = max_p
+
+            if name and price_val and name not in seen:
+                seen.add(name)
+                results.append(self._build(name, price_val, mrp=mrp))
+
+        return results
+
+    # ── __NEXT_DATA__ walker ──────────────────────────────────────────────────
+    def _walk_nd(self, nd) -> List[Dict]:
         cands: list = []
         self._dig(nd, cands, 0)
         if not cands:
             return []
-        out = []
-        for item in max(cands, key=len)[:40]:
+        out  = []
+        seen = set()
+        for item in max(cands, key=len)[:50]:
             name  = (item.get("name") or item.get("product_name") or
-                     item.get("productName") or "")
-            price = (item.get("price") or item.get("mrp") or
-                     item.get("selling_price") or item.get("sellingPrice"))
-            price = self._clean_price(str(price)) if price else None
-            brand = item.get("brand") or item.get("brandName") or ""
-            desc  = item.get("description") or ""
-            if name and price:
-                out.append(self._build(str(name), price,
-                                       brand=str(brand), description=str(desc)))
+                     item.get("productName") or item.get("display_name") or "")
+            price = (item.get("discountedSellingPrice") or
+                     item.get("sellingPrice") or item.get("price") or
+                     item.get("mrp") or item.get("selling_price"))
+            mrp_raw = item.get("mrp") or item.get("market_price") or 0
+            brand   = item.get("brand") or item.get("brandName") or ""
+            price   = self._clean_price(str(price)) if price else None
+            mrp     = self._clean_price(str(mrp_raw)) if mrp_raw else 0.0
+            if name and price and str(name) not in seen:
+                seen.add(str(name))
+                out.append(self._build(str(name), price, brand=str(brand),
+                                       mrp=mrp or 0.0))
         return out
 
     def _dig(self, obj, found, depth):
-        if depth > 12: return
+        if depth > 14: return
         if isinstance(obj, list) and obj and isinstance(obj[0], dict):
-            if set(obj[0]) & {"price","mrp","name","productName","product_name"}:
+            k = set(obj[0].keys())
+            if k & {"price", "mrp", "name", "productName", "product_name",
+                    "sellingPrice", "discountedSellingPrice", "display_name"}:
                 found.append(obj); return
         if isinstance(obj, dict):
-            for v in obj.values(): self._dig(v, found, depth+1)
+            for v in obj.values(): self._dig(v, found, depth + 1)
         elif isinstance(obj, list):
-            for i in obj: self._dig(i, found, depth+1)
-
-    def _html_prices(self, soup) -> List[Dict]:
-        results, seen = [], set()
-        for pel in [t for t in soup.find_all(["span","div","p"])
-                    if t.string and re.search(r"₹\s*\d+", t.string)][:40]:
-            pv = self._clean_price(pel.get_text(strip=True))
-            if not pv: continue
-            card, name = pel, ""
-            for _ in range(8):
-                card = card.parent
-                if card is None: break
-                ne = (card.find("h4") or card.find("h3") or
-                      card.find(attrs={"class": re.compile(r"name|title",re.I)}))
-                if ne:
-                    name = ne.get_text(strip=True)
-                    if len(name) > 4: break
-            if name and pv and name not in seen:
-                seen.add(name)
-                results.append(self._build(name, pv))
-        return results
+            for i in obj: self._dig(i, found, depth + 1)

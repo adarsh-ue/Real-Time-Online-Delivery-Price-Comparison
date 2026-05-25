@@ -48,3 +48,9 @@ Thumbs.db
 
 # WebDriver cache
 .wdm/
+
+# Selenium screenshots (generated at runtime — not committed)
+screenshots/
+
+# Test pipeline script
+test_pipeline.py

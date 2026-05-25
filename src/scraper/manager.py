@@ -3,34 +3,41 @@ manager.py
 ----------
 Orchestrates all Selenium scrapers with ONE shared Chrome driver.
 
-Platforms: BigBasket · JioMart · Amazon Fresh · Blinkit · Zepto · Swiggy Instamart
-  - All use real headless Chrome (Selenium)
-  - NO offline cache, NO fake data
-  - If a platform is blocked → logs reason → returns [] → continues
-  - One Chrome instance shared across all scrapers (faster startup)
+Active platforms (real-time data confirmed):
+  1. Amazon Fresh   — BeautifulSoup card parse
+  2. Blinkit        — Selenium + location cookie
+  3. BigBasket      — __NEXT_DATA__ JSON extraction
+  4. Zepto          — localStorage location injection
 
-Note: Dunzo shut down consumer grocery delivery in early 2024.
+Commented out (future work — files kept intact):
+  5. Flipkart       — CSS class names change too frequently; re-enable when stable
+  6. Swiggy Instamart — requires logged-in Swiggy session; blocked by AWS WAF
+
+All scrapers:
+  - Use real headless Chrome (Selenium)
+  - If a platform fails/is blocked → logs reason → returns [] → pipeline continues
+  - One Chrome instance shared across all scrapers (faster startup)
 """
 
 import time
 from typing import List, Dict, Callable
 
 from .base       import build_chrome_driver
-from .bigbasket  import BigBasketScraper
-from .jiomart    import JioMartScraper
 from .amazon     import AmazonScraper
 from .blinkit    import BlinkitScraper
+from .bigbasket  import BigBasketScraper
 from .zepto      import ZeptoScraper
-from .instamart  import InstamartScraper
+# from .flipkart   import FlipkartScraper   # TODO: re-enable when Flipkart CSS stabilises
+# from .instamart  import InstamartScraper  # TODO: re-enable with authenticated Swiggy session
 from .delivery   import stamp_delivery, get_city
 
 SCRAPER_CLASSES = [
-    BigBasketScraper,
-    JioMartScraper,
-    AmazonScraper,
-    BlinkitScraper,
-    ZeptoScraper,
-    InstamartScraper,
+    AmazonScraper,       # 1 — ✅ active
+    BlinkitScraper,      # 2 — ✅ active
+    BigBasketScraper,    # 3 — ✅ active
+    ZeptoScraper,        # 4 — ✅ active
+    # FlipkartScraper,   # 5 — ⏳ future: CSS class names change frequently
+    # InstamartScraper,  # 6 — ⏳ future: needs Swiggy authenticated session
 ]
 
 
@@ -39,7 +46,17 @@ class ScraperManager:
         self.log      = log_callback
         self.scrapers = [cls(log_callback) for cls in SCRAPER_CLASSES]
 
-    def scrape_all(self, query: str, pincode: str) -> List[Dict]:
+    def scrape_all(self, query: str, pincode: str,
+                   screenshot_dir: str = "",
+                   progress_cb=None) -> List[Dict]:
+        """
+        Scrape all active platforms.
+
+        Args:
+            screenshot_dir : folder to save browser screenshots (empty = skip)
+            progress_cb    : callable(platform, n_results, elapsed_s) called
+                             after each platform finishes — used to update UI
+        """
         self.log("=" * 58)
         self.log("PHASE 1 — SCRAPING  (Selenium / headless Chrome)")
         self.log(f"Query    : {query}")
@@ -47,7 +64,6 @@ class ScraperManager:
         self.log(f"Platforms: {', '.join(s.platform for s in self.scrapers)}")
         city = get_city(pincode)
         self.log(f"City     : {city or 'Unknown — using tier-2 estimates'}")
-        self.log(f"Note     : Dunzo shut down consumer ops (2024) — skipped")
         self.log("=" * 58)
 
         driver      = None
@@ -59,7 +75,8 @@ class ScraperManager:
 
             for scraper in self.scrapers:
                 t0      = time.time()
-                results = scraper.scrape(query, driver)
+                results = scraper.scrape(query, driver, pincode=pincode,
+                                         screenshot_dir=screenshot_dir)
                 elapsed = round(time.time() - t0, 2)
 
                 # Stamp pincode on each record
@@ -73,6 +90,13 @@ class ScraperManager:
                     f"[{label}]  {elapsed}s"
                 )
                 all_results.extend(results)
+
+                # Notify app.py so it can update the live progress card
+                if progress_cb:
+                    try:
+                        progress_cb(scraper.platform, len(results), elapsed)
+                    except Exception:
+                        pass
 
         except Exception as e:
             self.log(f"\n  [Manager] ❌ Browser error: {e}")
@@ -92,8 +116,7 @@ class ScraperManager:
         all_results = stamp_delivery(all_results, pincode)
 
         city = get_city(pincode)
-        self.log(f"\n  Total live products : {len(all_results)}")
-        self.log(f"  Fake / cached data  : 0")
+        self.log(f"\n  Total products found: {len(all_results)}")
         self.log(f"  Delivery times      : based on pincode {pincode} ({city or 'tier-2 city'})")
         self.log("─" * 58)
 
