@@ -1,0 +1,27 @@
+# ──────────────────────────────────────────────────────
+#  Real-Time Indian Grocery Price Comparison
+#  requirements.txt
+#
+#  Install: pip install -r requirements.txt
+#  Then:    python run.py   OR   streamlit run app.py
+# ──────────────────────────────────────────────────────
+
+# ── UI / Dashboard ─────────────────────────────────────
+streamlit>=1.32.0
+pandas>=2.0.0
+
+# ── Scraping (Selenium headless Chrome) ────────────────
+selenium>=4.18.0
+webdriver-manager>=4.0.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# ── Kafka message queue (optional — in-memory fallback) ─
+kafka-python>=2.0.2
+
+# ── Spark / Pandas processing ──────────────────────────
+# pyspark>=3.5.1   ← uncomment + install Java 11 for real Spark
+# pandas is already installed with streamlit
+
+# ── Utilities ──────────────────────────────────────────
+python-dotenv>=1.0.0
