@@ -220,39 +220,44 @@ if st.session_state.searched:
 
             st.markdown("&nbsp;")
 
-            # Determine whether MRP / discount data are actually useful
-            has_mrp      = any(r.get("mrp", 0) > r.get("price", 0) for r in results)
-            has_size     = any(r.get("size_label", "") for r in results)
-            has_ppu      = any(r.get("unit_norm","per pc") != "per pc" for r in results)
+            # Determine whether MRP / discount / size / ppu / url data are useful
+            has_mrp  = any(r.get("mrp", 0) > r.get("price", 0) for r in results)
+            has_size = any(r.get("size_label", "") for r in results)
+            has_ppu  = any(r.get("unit_norm","per pc") != "per pc" for r in results)
+            has_url  = any(r.get("product_url", "") for r in results)
 
             rows = []
             for r in results:
                 dm   = r.get("delivery_mins")
                 disc = r.get("discount_pct", 0.0)
+                vs   = r.get("value_score")
                 row = {
-                    "Rank"         : r.get("rank", "—"),
-                    "Product"      : r.get("product_name", "—"),
-                    "Platform"     : r.get("platform", "—"),
-                    "Price (₹)"    : r.get("price", "—"),
-                    "Delivery"     : f"~{dm} min" if dm else "—",
+                    "Rank"      : r.get("rank", "—"),
+                    "Product"   : r.get("product_name", "—"),
+                    "Platform"  : r.get("platform", "—"),
+                    "Price (₹)" : r.get("price", "—"),
+                    "Delivery"  : f"~{dm} min" if dm else "—",
                 }
-                if has_mrp:
-                    mrp = r.get("mrp", 0)
-                    row["MRP (₹)"]    = mrp if mrp > r.get("price", 0) else "—"
-                    row["Discount"]   = f"{disc:.0f}%" if disc > 0 else "—"
-                if has_size:
-                    row["Size"] = r.get("size_label") or "—"
                 if has_ppu:
                     ppu  = r.get("price_per_unit")
                     norm = r.get("unit_norm", "per pc")
-                    row["₹/unit"] = f"₹{ppu:.1f} {norm}" if ppu else "—"
+                    row["₹/unit"]      = f"₹{ppu:.1f} {norm}" if ppu else "—"
+                    row["Value Score"] = f"{vs:.2f}" if vs else "—"
+                if has_size:
+                    row["Size"] = r.get("size_label") or "—"
+                if has_mrp:
+                    mrp = r.get("mrp", 0)
+                    row["MRP (₹)"]  = mrp if mrp > r.get("price", 0) else "—"
+                    row["Discount"] = f"{disc:.0f}%" if disc > 0 else "—"
+                if has_url:
+                    row["Buy"] = r.get("product_url") or ""
                 rows.append(row)
 
             df = pd.DataFrame(rows)
+            # Sort by rank (already set by value_score in processor)
             try:
-                df["_s"] = pd.to_numeric(df["Rank"],      errors="coerce").fillna(99)
-                df["_p"] = pd.to_numeric(df["Price (₹)"], errors="coerce").fillna(9999)
-                df = df.sort_values(["_s", "_p"]).drop(columns=["_s", "_p"])
+                df["_s"] = pd.to_numeric(df["Rank"], errors="coerce").fillna(99)
+                df = df.sort_values("_s").drop(columns=["_s"])
             except Exception:
                 pass
 
@@ -261,13 +266,20 @@ if st.session_state.searched:
                 "Price (₹)" : st.column_config.NumberColumn(format="₹%.2f"),
                 "Delivery"  : st.column_config.TextColumn(width="small"),
             }
+            if has_ppu:
+                col_cfg["₹/unit"]      = st.column_config.TextColumn(width="medium",
+                                          help="Price per 100g / 100mL / piece — for fair comparison")
+                col_cfg["Value Score"] = st.column_config.TextColumn(width="small",
+                                          help="₹/unit × delivery penalty (15%/hr) — lower is better")
+            if has_size:
+                col_cfg["Size"]     = st.column_config.TextColumn(width="small")
             if has_mrp:
                 col_cfg["MRP (₹)"]  = st.column_config.TextColumn(width="small")
                 col_cfg["Discount"] = st.column_config.TextColumn(width="small")
-            if has_size:
-                col_cfg["Size"]    = st.column_config.TextColumn(width="medium")
-            if has_ppu:
-                col_cfg["₹/unit"]  = st.column_config.TextColumn(width="medium")
+            if has_url:
+                col_cfg["Buy"] = st.column_config.LinkColumn(
+                    "Buy", display_text="🛒 Buy", width="small"
+                )
 
             st.dataframe(df, use_container_width=True, hide_index=True,
                          column_config=col_cfg)

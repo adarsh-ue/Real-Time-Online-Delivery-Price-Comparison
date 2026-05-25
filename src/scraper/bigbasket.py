@@ -89,6 +89,11 @@ class BigBasketScraper(BaseScraper):
         desc  = item.get("desc") or item.get("description") or ""
         mrp_raw = item.get("mrp") or item.get("market_price") or item.get("original_price")
 
+        # Product URL from url_key or absolute_url
+        url_key = item.get("absolute_url") or item.get("url") or ""
+        product_url = ("https://www.bigbasket.com" + url_key
+                       if url_key and url_key.startswith("/") else url_key)
+
         price = self._clean_price(str(price)) if price else None
         mrp   = self._clean_price(str(mrp_raw)) if mrp_raw else 0.0
         if not price or not name:
@@ -96,6 +101,7 @@ class BigBasketScraper(BaseScraper):
 
         rec = self._build(str(name), price, brand=str(brand), description=str(desc),
                           mrp=mrp or 0.0)
+        rec["product_url"] = product_url
         # Override size_label with the BigBasket pack field if present
         qty = item.get("w") or item.get("pack_desc") or ""
         if qty:

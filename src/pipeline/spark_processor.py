@@ -145,26 +145,33 @@ class SparkProcessor:
         self.log("  [Pandas] Step 2: Normalising unit labels...")
         df["unit_norm"] = df["unit"].apply(self._unit_norm_label)
 
-        self.log("  [Pandas] Step 3: Ranking cheapest → costliest per product+size group...")
-        df["rank"] = (
-            df.groupby(["product_name", "size_label"])["price"]
-              .rank(method="min", ascending=True)
-              .astype(int)
-        )
+        self.log("  [Pandas] Step 3: Computing value score (price_per_unit + delivery penalty)...")
+        # Composite value score — factors BOTH unit price AND delivery speed:
+        #   penalty = 15% extra per hour of delivery wait
+        #   A 10-min delivery adds ~2.5% penalty; 120-min adds 30%
+        def value_score(row):
+            ppu  = float(row.get("price_per_unit") or row["price"])
+            dm   = float(row.get("delivery_mins") or 60)
+            return round(ppu * (1 + (dm / 60) * 0.15), 4)
+        df["value_score"] = df.apply(value_score, axis=1)
 
-        self.log("  [Pandas] Step 4: Calculating savings vs most expensive in group...")
-        df["max_price"] = df.groupby(["product_name","size_label"])["price"].transform("max")
-        df["savings"]   = (df["max_price"] - df["price"]).round(2)
+        self.log("  [Pandas] Step 4: Ranking globally by value score (price/unit + delivery)...")
+        df["rank"] = df["value_score"].rank(method="min", ascending=True).astype(int)
 
-        self.log("  [Pandas] Step 5: Flagging best deal per group...")
+        self.log("  [Pandas] Step 5: Calculating savings vs worst value in results...")
+        max_price = df["price"].max()
+        df["savings"] = (max_price - df["price"]).round(2)
+
+        self.log("  [Pandas] Step 6: Flagging best deal (rank == 1)...")
         df["is_best_deal"] = df["rank"] == 1
 
-        self.log("  [Pandas] Step 6: Adding processing timestamp...")
+        self.log("  [Pandas] Step 7: Adding processing timestamp...")
         df["processed_at"] = datetime.now().isoformat()
 
-        df = df.sort_values(["product_name", "size_label", "rank"])
+        df = df.sort_values("rank")
         rows = df.to_dict(orient="records")
         self.log(f"  [Pandas] ✅ Processing complete — {len(rows)} records")
+        self.log(f"  [Pandas]    Ranking: price/unit × delivery penalty (15%/hr)")
         return rows
 
     # ── Helpers ────────────────────────────────────────────────────────────────

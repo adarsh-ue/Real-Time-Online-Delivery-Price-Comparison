@@ -69,8 +69,12 @@ class AmazonScraper(BaseScraper):
         price = None
         mrp   = 0.0
 
-        # Amazon renders two .a-price containers:
-        #  1st = selling price, 2nd = MRP (has aria-label "M.R.P." or "was")
+        # Amazon renders .a-price containers in DOM order:
+        #   1st container = selling price
+        #   2nd container = MRP / strikethrough (class includes "a-text-strike" or
+        #                   aria-label contains "M.R.P" / "was")
+        # IMPORTANT: do NOT use min() — it accidentally picks up per-unit price
+        # elements (e.g. "₹7.72/100 g" rendered as a separate .a-price).
         price_containers = card.select(".a-price")
         prices_found = []
         for pc in price_containers:
@@ -80,11 +84,19 @@ class AmazonScraper(BaseScraper):
                 if p and p > 1:
                     prices_found.append(p)
 
-        if len(prices_found) >= 2:
-            price = min(prices_found)   # selling price is the lower one
-            mrp   = max(prices_found)   # MRP is the higher one
-        elif len(prices_found) == 1:
+        if prices_found:
+            # First price in DOM = selling price (Amazon always renders it first)
             price = prices_found[0]
+            # MRP = highest price found (if greater than selling price)
+            max_p = max(prices_found)
+            mrp   = max_p if max_p > price else 0.0
+
+            # ── Sanity check ────────────────────────────────────────────────
+            # If price is < 5 % of MRP, we likely grabbed a per-unit sub-price.
+            # Walk forward in the list to find a sensible selling price.
+            if mrp and price < mrp * 0.05:
+                reasonable = [p for p in prices_found if p >= mrp * 0.05]
+                price = reasonable[0] if reasonable else mrp
         else:
             # Fallback: whole.fraction spans
             whole = card.select_one(".a-price-whole")
@@ -97,8 +109,14 @@ class AmazonScraper(BaseScraper):
         if not price:
             return None
 
-        # ── Brand: first word of product title (Amazon rarely shows brand separately) ──
-        # Skip if first word looks like a number or common word
+        # ── Product URL ───────────────────────────────────────────────────────
+        product_url = ""
+        a_tag = card.select_one("h2 a[href]")
+        if a_tag:
+            href = a_tag.get("href", "")
+            product_url = ("https://www.amazon.in" + href) if href.startswith("/") else href
+
+        # ── Brand ─────────────────────────────────────────────────────────────
         words = name.split()
         brand = words[0] if (words and len(words[0]) > 1 and
                              not words[0][0].isdigit()) else ""
@@ -111,4 +129,6 @@ class AmazonScraper(BaseScraper):
                      if len(b.get_text(strip=True)) > 5]
             desc = " | ".join(parts)[:200]
 
-        return self._build(name, price, brand=brand, description=desc, mrp=mrp)
+        rec = self._build(name, price, brand=brand, description=desc, mrp=mrp)
+        rec["product_url"] = product_url
+        return rec

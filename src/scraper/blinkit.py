@@ -115,6 +115,12 @@ class BlinkitScraper(BaseScraper):
 
         rec = self._build(raw_name, price, mrp=mrp)
         rec["delivery_mins"] = dm
+        # Try to get product URL from card link
+        a_tag = card.find("a", href=True)
+        if a_tag:
+            href = a_tag.get("href", "")
+            rec["product_url"] = ("https://blinkit.com" + href
+                                  if href.startswith("/") else href)
         return rec
 
     def _fallback_price_walk(self, soup: BeautifulSoup) -> List[Dict]:

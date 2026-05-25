@@ -239,4 +239,5 @@ class BaseScraper:
             "delivery_mins":  self.delivery_mins,
             "in_stock":       True,
             "pincode":        "",
+            "product_url":    "",   # scrapers set this to the actual product page URL
         }
