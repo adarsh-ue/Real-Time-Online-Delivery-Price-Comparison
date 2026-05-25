@@ -174,7 +174,16 @@ class ZeptoScraper(BaseScraper):
 
             if name and price_val and name not in seen:
                 seen.add(name)
-                results.append(self._build(name, price_val, mrp=mrp))
+                rec = self._build(name, price_val, mrp=mrp)
+                # Try to extract a direct product link from the card
+                a_tag = card.find("a", href=True) if card is not None else None
+                if a_tag:
+                    href = a_tag.get("href", "")
+                    rec["product_url"] = (
+                        "https://www.zepto.com" + href
+                        if href.startswith("/") else href
+                    )
+                results.append(rec)
 
         return results
 
@@ -198,8 +207,17 @@ class ZeptoScraper(BaseScraper):
             mrp     = self._clean_price(str(mrp_raw)) if mrp_raw else 0.0
             if name and price and str(name) not in seen:
                 seen.add(str(name))
-                out.append(self._build(str(name), price, brand=str(brand),
-                                       mrp=mrp or 0.0))
+                rec = self._build(str(name), price, brand=str(brand), mrp=mrp or 0.0)
+                # Try to extract product URL from __NEXT_DATA__
+                url_key = (item.get("urlKey") or item.get("url_key") or
+                           item.get("slug") or item.get("productUrl") or
+                           item.get("product_url") or "")
+                if url_key:
+                    rec["product_url"] = (
+                        "https://www.zepto.com" + url_key
+                        if url_key.startswith("/") else url_key
+                    )
+                out.append(rec)
         return out
 
     def _dig(self, obj, found, depth):

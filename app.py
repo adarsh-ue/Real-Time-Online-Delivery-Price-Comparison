@@ -220,11 +220,26 @@ if st.session_state.searched:
 
             st.markdown("&nbsp;")
 
-            # Determine whether MRP / discount / size / ppu / url data are useful
+            # Fallback search URLs — every product gets a working link
+            _SEARCH_URLS = {
+                "Amazon Fresh" : "https://www.amazon.in/s?k={}&i=grocery",
+                "Blinkit"      : "https://blinkit.com/s/?q={}",
+                "BigBasket"    : "https://www.bigbasket.com/ps/?q={}",
+                "Zepto"        : "https://www.zepto.com/search?query={}",
+            }
+            def _product_link(r: dict) -> str:
+                url = r.get("product_url", "")
+                if url:
+                    return url
+                platform = r.get("platform", "")
+                name     = re.sub(r"\s+", "+", r.get("product_name", "").strip())
+                tmpl     = _SEARCH_URLS.get(platform, "")
+                return tmpl.format(name) if tmpl else ""
+
+            # Determine whether MRP / discount / size / ppu data are useful
             has_mrp  = any(r.get("mrp", 0) > r.get("price", 0) for r in results)
             has_size = any(r.get("size_label", "") for r in results)
             has_ppu  = any(r.get("unit_norm","per pc") != "per pc" for r in results)
-            has_url  = any(r.get("product_url", "") for r in results)
 
             rows = []
             for r in results:
@@ -249,8 +264,8 @@ if st.session_state.searched:
                     mrp = r.get("mrp", 0)
                     row["MRP (₹)"]  = mrp if mrp > r.get("price", 0) else "—"
                     row["Discount"] = f"{disc:.0f}%" if disc > 0 else "—"
-                if has_url:
-                    row["Buy"] = r.get("product_url") or ""
+                # Buy link — always present (direct URL or platform search fallback)
+                row["Buy"] = _product_link(r)
                 rows.append(row)
 
             df = pd.DataFrame(rows)
@@ -265,6 +280,11 @@ if st.session_state.searched:
                 "Rank"      : st.column_config.NumberColumn(width="small"),
                 "Price (₹)" : st.column_config.NumberColumn(format="₹%.2f"),
                 "Delivery"  : st.column_config.TextColumn(width="small"),
+                # Buy — always show; renders as clickable link
+                "Buy"       : st.column_config.LinkColumn(
+                    "🛒 Link", display_text="🛒 Open", width="small",
+                    help="Direct product page, or platform search if no direct link",
+                ),
             }
             if has_ppu:
                 col_cfg["₹/unit"]      = st.column_config.TextColumn(width="medium",
@@ -276,10 +296,6 @@ if st.session_state.searched:
             if has_mrp:
                 col_cfg["MRP (₹)"]  = st.column_config.TextColumn(width="small")
                 col_cfg["Discount"] = st.column_config.TextColumn(width="small")
-            if has_url:
-                col_cfg["Buy"] = st.column_config.LinkColumn(
-                    "Buy", display_text="🛒 Buy", width="small"
-                )
 
             st.dataframe(df, use_container_width=True, hide_index=True,
                          column_config=col_cfg)
