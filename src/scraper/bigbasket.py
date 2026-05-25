@@ -172,7 +172,31 @@ class BigBasketScraper(BaseScraper):
             key = f"{name}_{price_val}"
             if key not in seen:
                 seen.add(key)
-                results.append(self._build(name, price_val, brand=brand))
+                rec = self._build(name, price_val, brand=brand)
+                # Try to extract product URL from <a> inside or above card
+                product_url = ""
+                if card is not None:
+                    a_tag = card.find("a", href=re.compile(r"^/pd/"))
+                    if not a_tag:
+                        a_tag = card.find("a", href=True)
+                    if a_tag:
+                        href = a_tag.get("href", "")
+                        if href.startswith("/"):
+                            product_url = "https://www.bigbasket.com" + href
+                # Walk up if not found inside
+                if not product_url and card is not None:
+                    node = card
+                    for _ in range(4):
+                        node = getattr(node, "parent", None)
+                        if node is None:
+                            break
+                        if getattr(node, "name", "") == "a":
+                            href = node.get("href", "")
+                            if href and href.startswith("/"):
+                                product_url = "https://www.bigbasket.com" + href
+                                break
+                rec["product_url"] = product_url
+                results.append(rec)
 
         return results
 

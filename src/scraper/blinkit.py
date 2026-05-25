@@ -115,12 +115,38 @@ class BlinkitScraper(BaseScraper):
 
         rec = self._build(raw_name, price, mrp=mrp)
         rec["delivery_mins"] = dm
-        # Try to get product URL from card link
-        a_tag = card.find("a", href=True)
-        if a_tag:
-            href = a_tag.get("href", "")
-            rec["product_url"] = ("https://blinkit.com" + href
-                                  if href.startswith("/") else href)
+
+        # ── Product URL extraction ──────────────────────────────────────────
+        # Strategy 1: look for <a> INSIDE the card (e.g., product image link)
+        product_url = ""
+        a_inner = card.find("a", href=True)
+        if a_inner:
+            href = a_inner.get("href", "")
+            if href.startswith("/") and len(href) > 3:
+                product_url = "https://blinkit.com" + href
+
+        # Strategy 2: walk UP ancestors — Blinkit wraps the entire card in <a>
+        # Typical structure: <a href="/prn/product/500-g/prid/12345"> <div.tw-w-full> <div.tw-flex...>
+        if not product_url:
+            node = card
+            for _ in range(6):
+                node = getattr(node, "parent", None)
+                if node is None:
+                    break
+                if getattr(node, "name", "") == "a":
+                    href = node.get("href", "")
+                    if href and href.startswith("/") and len(href) > 3:
+                        product_url = "https://blinkit.com" + href
+                        break
+                # Also check for a single product-pattern <a> inside this ancestor
+                # (e.g., /prn/ or /pn/ paths)
+                a_tag = node.find("a", href=re.compile(r"^/(prn|pn)/"))
+                if a_tag:
+                    href = a_tag.get("href", "")
+                    product_url = "https://blinkit.com" + href
+                    break
+
+        rec["product_url"] = product_url
         return rec
 
     def _fallback_price_walk(self, soup: BeautifulSoup) -> List[Dict]:

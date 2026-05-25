@@ -175,14 +175,41 @@ class ZeptoScraper(BaseScraper):
             if name and price_val and name not in seen:
                 seen.add(name)
                 rec = self._build(name, price_val, mrp=mrp)
-                # Try to extract a direct product link from the card
-                a_tag = card.find("a", href=True) if card is not None else None
-                if a_tag:
-                    href = a_tag.get("href", "")
-                    rec["product_url"] = (
-                        "https://www.zepto.com" + href
-                        if href.startswith("/") else href
-                    )
+
+                # ── Product URL extraction ──────────────────────────────────
+                # Strategy 1: look for a product-pattern <a> inside current card level
+                product_url = ""
+                if card is not None:
+                    # Prefer links that look like Zepto product pages (/pn/ or /cn/)
+                    a_tag = card.find("a", href=re.compile(r"/(pn|cn|pd)/"))
+                    if not a_tag:
+                        a_tag = card.find("a", href=True)
+                    if a_tag:
+                        href = a_tag.get("href", "")
+                        if href and href.startswith("/") and len(href) > 3:
+                            product_url = "https://www.zepto.com" + href
+
+                # Strategy 2: walk UP — Zepto wraps product cards in <a> tags
+                # Typical: <a href="/pn/atta/..."> <div class="product-card"> ... </a>
+                if not product_url and card is not None:
+                    node = card
+                    for _ in range(6):
+                        node = getattr(node, "parent", None)
+                        if node is None:
+                            break
+                        if getattr(node, "name", "") == "a":
+                            href = node.get("href", "")
+                            if href and href.startswith("/") and len(href) > 3:
+                                product_url = "https://www.zepto.com" + href
+                                break
+                        # Check for product-path <a> among node's children
+                        a_tag = node.find("a", href=re.compile(r"/(pn|cn)/"))
+                        if a_tag:
+                            href = a_tag.get("href", "")
+                            product_url = "https://www.zepto.com" + href
+                            break
+
+                rec["product_url"] = product_url
                 results.append(rec)
 
         return results
