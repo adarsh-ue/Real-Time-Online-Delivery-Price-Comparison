@@ -70,6 +70,8 @@ class InstamartScraper(BaseScraper):
         url = SEARCH_URL.format(query=query.replace(" ", "+"))
         self.log(f"  [Instamart] → {url}")
         driver.get(url)
+        time.sleep(3)
+        driver.refresh()
         time.sleep(10)   # Swiggy loads products via client-side API calls
 
         soup    = BeautifulSoup(driver.page_source, "html.parser")
