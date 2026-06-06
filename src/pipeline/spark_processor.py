@@ -38,11 +38,12 @@ class SparkProcessor:
                 import sys
                 os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
                 os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
-                # Set HADOOP_HOME for winutils (suppresses Windows warnings)
-                import pathlib
-                hadoop_home = pathlib.Path.home() / "hadoop"
-                if hadoop_home.exists():
-                    os.environ.setdefault("HADOOP_HOME", str(hadoop_home))
+                # winutils is only needed on Windows — skip entirely on Mac/Linux
+                if sys.platform == "win32":
+                    import pathlib
+                    hadoop_home = pathlib.Path.home() / "hadoop"
+                    if hadoop_home.exists():
+                        os.environ.setdefault("HADOOP_HOME", str(hadoop_home))
                 return True
         except ImportError:
             pass
