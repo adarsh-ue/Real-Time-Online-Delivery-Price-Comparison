@@ -1,6 +1,6 @@
 # 🛒 Real-Time Indian Grocery Price Comparison
 
-A complete **Data Engineering pipeline** that scrapes live grocery prices from India's top quick-commerce platforms in real time, processes them through **Apache Kafka** and **Apache Spark**, stores results in **SQLite**, and presents everything on an interactive **Streamlit** dashboard.
+A complete **Data Engineering pipeline** that scrapes live grocery prices from India's top quick-commerce platforms in real time, streams them through **Apache Kafka**, processes with **Apache Spark**, stores in **SQLite**, and presents everything on an interactive **Streamlit** dashboard.
 
 > ✅ **100% real-time data** — no cached datasets, no fake prices. Every search hits live websites via headless Chrome.
 
@@ -13,129 +13,226 @@ User enters product + pincode
          │
          ▼
 ┌─────────────────────┐
-│  PHASE 1: SCRAPING  │  Selenium headless Chrome
-│  ─────────────────  │  visits 4 platforms simultaneously
-│  Amazon Fresh       │  using one shared browser instance
-│  Blinkit            │  BeautifulSoup parses HTML / __NEXT_DATA__
-│  BigBasket          │  localStorage/cookie injection for location
+│  PHASE 1: SCRAPING  │  Selenium headless Chrome — 4 platforms
+│  Amazon Fresh       │  BeautifulSoup parses HTML / __NEXT_DATA__
+│  Blinkit            │  localStorage/cookie injection for location
+│  BigBasket          │
 │  Zepto              │
 └────────┬────────────┘
-         │  raw product dicts (name, price, MRP, size, platform)
          ▼
 ┌─────────────────────┐
 │  PHASE 2: KAFKA     │  Real broker at localhost:9092 (KRaft mode)
-│  ─────────────────  │  Producer → "raw-prices" topic
-│  Producer           │  Offset snapshot before produce
-│  Consumer           │  Consumer seeks to exact offset (no stale msgs)
-│  Topic: raw-prices  │  Graceful in-memory fallback if broker down
+│  Producer           │  Offset snapshot → no stale messages
+│  Consumer           │  In-memory fallback if broker is down
+│  Topic: raw-prices  │
 └────────┬────────────┘
-         │  JSON-serialised messages consumed back
          ▼
 ┌─────────────────────┐
-│  PHASE 3: SPARK     │  Apache Spark 4.1.2  local[2]
-│  ─────────────────  │  Window functions: rank(), max()
-│  Rank cheapest→     │  price_per_unit (₹/100g, ₹/100mL, ₹/pc)
-│  ₹/unit normalise   │  savings vs most expensive option
-│  Flag best deal     │  is_best_deal flag per product group
-│  Pandas fallback    │  Same logic if PySpark not installed
+│  PHASE 3: SPARK     │  Apache Spark 4.x  local[2]
+│  ₹/unit normalise   │  value_score = price/unit × delivery penalty
+│  Rank products      │  Pandas fallback if PySpark not installed
+│  Flag best deal     │
 └────────┬────────────┘
-         │  processed records
          ▼
 ┌─────────────────────┐
-│  PHASE 4: SQLITE    │  Built into Python — no setup needed
-│  ─────────────────  │  Table: searches (query, pincode, timestamp)
-│  searches table     │  Table: prices   (all product records)
-│  prices table       │  Auto-created on first run
+│  PHASE 4: SQLITE    │  Built into Python — zero setup
+│  searches table     │  Auto-created on first run
+│  prices table       │
 └────────┬────────────┘
-         │
          ▼
 ┌─────────────────────┐
 │  STREAMLIT UI       │  http://localhost:8501
-│  ─────────────────  │  Live terminal · Results table · Bar chart
-│  Results table      │  Pipeline timings · Raw JSON viewer
-│  Price bar chart    │  Search history (SQLite log)
-│  Pipeline timings   │  CSV + JSON download
-│  Raw JSON viewer    │
+│  Results table      │  Live terminal · Price chart
+│  Buy links          │  Pipeline timings · Raw JSON
+│  Search history     │
 └─────────────────────┘
 ```
 
 ---
 
-## 🖥️ Prerequisites
+## 🖥️ Prerequisites — Both Platforms
 
-| Requirement | Version | Notes |
-|-------------|---------|-------|
+| Requirement | Version | Download |
+|-------------|---------|----------|
 | **Python** | 3.10 or later | [python.org](https://python.org) |
-| **Java (JDK)** | 11 or later | [adoptium.net](https://adoptium.net) — required for Apache Spark |
-| **Google Chrome** | Any recent | Selenium drives it in headless mode |
-| **Apache Kafka** | 3.9+ | Only needed for real Kafka (see setup below) |
-
-> **Windows note:** Set `JAVA_HOME` to your JDK folder after installing Java.
+| **Java (JDK)** | 11 or later | [adoptium.net](https://adoptium.net) |
+| **Google Chrome** | Any recent | [google.com/chrome](https://google.com/chrome) |
+| **Apache Kafka** | 3.9+ (optional) | [kafka.apache.org](https://kafka.apache.org/downloads) — app works without it |
 
 ---
 
-## 🚀 Installation — Fresh Device
+## 🍎 Mac Setup Guide
 
-### Step 1 — Clone the repo
+### Step 1 — Install system dependencies
 
 ```bash
-git clone https://github.com/<your-username>/Real-Time-Online-Delivery-Price-Comparison.git
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Python 3.10+
+brew install python@3.10
+
+# Install Java 11+ (needed for Kafka and Spark)
+brew install --cask temurin
+
+# Verify Java
+java -version
+```
+
+### Step 2 — Clone the repo
+
+```bash
+git clone https://github.com/adarsh-ue/Real-Time-Online-Delivery-Price-Comparison.git
 cd Real-Time-Online-Delivery-Price-Comparison
 ```
 
-### Step 2 — Install Python dependencies
+### Step 3 — Install Python dependencies
 
 ```bash
+pip3 install -r requirements.txt
+```
+
+### Step 4 — Install Apache Kafka (optional but recommended)
+
+```bash
+# Download Kafka 3.9.2
+curl -L "https://downloads.apache.org/kafka/3.9.2/kafka_2.13-3.9.2.tgz" \
+     -o ~/Downloads/kafka.tgz
+
+# Extract to home folder
+tar -xzf ~/Downloads/kafka.tgz -C ~/
+mv ~/kafka_2.13-3.9.2 ~/kafka
+
+# Format Kafka storage (KRaft mode — no ZooKeeper needed)
+UUID=$(~/kafka/bin/kafka-storage.sh random-uuid)
+
+# Edit log.dirs in the config (change /tmp/kraft-combined-logs to a real path)
+sed -i '' 's|log.dirs=/tmp/kraft-combined-logs|log.dirs=/Users/'"$USER"'/kafka-logs|' \
+    ~/kafka/config/kraft/server.properties
+
+# Format storage
+~/kafka/bin/kafka-storage.sh format \
+    --config ~/kafka/config/kraft/server.properties \
+    --cluster-id "$UUID"
+```
+
+> **Note:** No winutils needed on Mac. Spark runs natively.
+
+### Step 5 — Run the app
+
+**Option A — One-click launcher (recommended):**
+
+```bash
+chmod +x start_app.sh
+./start_app.sh
+```
+
+This automatically starts Kafka, waits for the broker, then launches Streamlit at `http://localhost:8501`.
+
+**Option B — Manual (two terminals):**
+
+```bash
+# Terminal 1 — Start Kafka
+export KAFKA_HEAP_OPTS="-Xmx1G -Xms1G"
+~/kafka/bin/kafka-server-start.sh ~/kafka/config/kraft/server.properties
+
+# Terminal 2 — Start app
+export PYTHONIOENCODING=utf-8
+python3 -m streamlit run app.py
+```
+
+---
+
+## 🪟 Windows Setup Guide
+
+### Step 1 — Install system dependencies
+
+1. Install **Python 3.10+** from [python.org](https://python.org)
+   - ✅ Check **"Add Python to PATH"** during install
+
+2. Install **Java 11+** from [adoptium.net](https://adoptium.net)
+   - After install, set `JAVA_HOME` in System Environment Variables:
+     ```
+     Variable: JAVA_HOME
+     Value:    C:\Program Files\Eclipse Adoptium\jdk-XX.X.X.XX-hotspot
+     ```
+
+3. Install **Google Chrome** from [google.com/chrome](https://google.com/chrome)
+
+### Step 2 — Clone the repo
+
+```powershell
+git clone https://github.com/adarsh-ue/Real-Time-Online-Delivery-Price-Comparison.git
+cd Real-Time-Online-Delivery-Price-Comparison
+```
+
+### Step 3 — Install Python dependencies
+
+```powershell
 pip install -r requirements.txt
 ```
 
-> This installs: `streamlit`, `selenium`, `beautifulsoup4`, `kafka-python`, `pyspark`, `plotly`, and others.
-
-### Step 3 — Install Apache Kafka (Windows, no Docker)
+### Step 4 — Install Apache Kafka (optional but recommended)
 
 ```powershell
 # Download Kafka 3.9.2
-Invoke-WebRequest -Uri "https://downloads.apache.org/kafka/3.9.2/kafka_2.13-3.9.2.tgz" `
-    -OutFile "$env:USERPROFILE\Downloads\kafka.tgz" -UseBasicParsing
+Invoke-WebRequest `
+  -Uri "https://downloads.apache.org/kafka/3.9.2/kafka_2.13-3.9.2.tgz" `
+  -OutFile "$env:USERPROFILE\Downloads\kafka.tgz" -UseBasicParsing
 
 # Extract to home folder
 tar -xzf "$env:USERPROFILE\Downloads\kafka.tgz" -C "$env:USERPROFILE"
 Rename-Item "$env:USERPROFILE\kafka_2.13-3.9.2" "$env:USERPROFILE\kafka"
 ```
 
-Fix the Windows 11 `wmic` issue in the Kafka startup script:
+Fix the Windows 11 `wmic` bug in Kafka's startup script — open this file in Notepad:
 
-```powershell
-# Open the file and replace the wmic block:
-# Find this:
-#   wmic os get osarchitecture | find /i "32-bit" >nul 2>&1
-# Replace the whole IF block with:
-#   set KAFKA_HEAP_OPTS=-Xmx1G -Xms1G
+```
+C:\Users\<you>\kafka\bin\windows\kafka-server-start.bat
 ```
 
-Format Kafka storage (KRaft mode — no ZooKeeper needed):
+Find this block (around line 28):
+```bat
+for /f "tokens=*" %%i in ('wmic os get osarchitecture') do ...
+```
+Replace the **entire** `IF` block with this one line:
+```bat
+set KAFKA_HEAP_OPTS=-Xmx1G -Xms1G
+```
+Do the same in `kafka-server-stop.bat`.
+
+Format Kafka storage (KRaft mode — no ZooKeeper):
 
 ```powershell
+# Update log path in server.properties
+# Open: %USERPROFILE%\kafka\config\kraft\server.properties
+# Change:  log.dirs=/tmp/kraft-combined-logs
+# To:      log.dirs=C:/Users/<you>/kafka-logs
+
+# Generate cluster ID and format storage
 $uuid = & "$env:USERPROFILE\kafka\bin\windows\kafka-storage.bat" random-uuid
-# Edit config: set log.dirs=C:/Users/<you>/kafka-logs in:
-#   %USERPROFILE%\kafka\config\kraft\server.properties
 & "$env:USERPROFILE\kafka\bin\windows\kafka-storage.bat" format `
     --config "$env:USERPROFILE\kafka\config\kraft\server.properties" `
     --cluster-id $uuid
 ```
 
-### Step 4 — Install winutils (for Spark on Windows)
+### Step 5 — Install winutils (for Spark on Windows)
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\hadoop\bin"
-Invoke-WebRequest -Uri "https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.6/bin/winutils.exe" `
-    -OutFile "$env:USERPROFILE\hadoop\bin\winutils.exe" -UseBasicParsing
-Invoke-WebRequest -Uri "https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.6/bin/hadoop.dll" `
-    -OutFile "$env:USERPROFILE\hadoop\bin\hadoop.dll" -UseBasicParsing
-[System.Environment]::SetEnvironmentVariable("HADOOP_HOME", "$env:USERPROFILE\hadoop", "User")
+
+Invoke-WebRequest `
+  -Uri "https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.6/bin/winutils.exe" `
+  -OutFile "$env:USERPROFILE\hadoop\bin\winutils.exe" -UseBasicParsing
+
+Invoke-WebRequest `
+  -Uri "https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.6/bin/hadoop.dll" `
+  -OutFile "$env:USERPROFILE\hadoop\bin\hadoop.dll" -UseBasicParsing
+
+[System.Environment]::SetEnvironmentVariable("HADOOP_HOME","$env:USERPROFILE\hadoop","User")
 ```
 
-### Step 5 — Run the app
+### Step 6 — Run the app
 
 **Option A — One-click launcher (recommended):**
 
@@ -143,9 +240,9 @@ Invoke-WebRequest -Uri "https://github.com/cdarlint/winutils/raw/master/hadoop-3
 Double-click  START_APP.bat
 ```
 
-This automatically starts Kafka, waits for the broker, sets env vars, then launches Streamlit at `http://localhost:8501`.
+Automatically starts Kafka, waits for broker, launches Streamlit at `http://localhost:8501`.
 
-**Option B — Manual:**
+**Option B — Manual (two terminals):**
 
 ```powershell
 # Terminal 1 — Start Kafka
@@ -156,8 +253,22 @@ $env:KAFKA_HEAP_OPTS = "-Xmx1G -Xms1G"
 # Terminal 2 — Start app
 $env:PYTHONIOENCODING = "utf-8"
 $env:HADOOP_HOME = "$env:USERPROFILE\hadoop"
-streamlit run app.py
+python -m streamlit run app.py
 ```
+
+---
+
+## ⚡ Quick Comparison — Mac vs Windows
+
+| Task | Mac | Windows |
+|------|-----|---------|
+| Install Java | `brew install --cask temurin` | Download from adoptium.net |
+| Install Kafka | `curl` + `tar` | `Invoke-WebRequest` + `tar` |
+| Kafka scripts | `.sh` files in `bin/` | `.bat` files in `bin/windows/` |
+| winutils | ❌ Not needed | ✅ Required for Spark |
+| Launch app | `./start_app.sh` | `START_APP.bat` |
+| Python command | `python3` | `python` |
+| Spark | Works natively | Needs winutils |
 
 ---
 
@@ -167,127 +278,67 @@ streamlit run app.py
 Real-Time-Online-Delivery-Price-Comparison/
 │
 ├── app.py                        ← Streamlit dashboard (entry point)
-├── START_APP.bat                 ← One-click launcher (Kafka + Streamlit)
+├── START_APP.bat                 ← One-click launcher for Windows
+├── start_app.sh                  ← One-click launcher for Mac / Linux
 ├── requirements.txt              ← pip dependencies
 ├── README.md                     ← This file
 │
 ├── src/
-│   ├── scraper/                  ── PHASE 1: Selenium scrapers ──────────
-│   │   ├── base.py               ← BaseScraper + Chrome driver factory
-│   │   │                           size/unit parser, _build(), price cleaner
-│   │   ├── amazon.py             ← Amazon Fresh  ✅ ACTIVE
-│   │   ├── blinkit.py            ← Blinkit        ✅ ACTIVE
-│   │   ├── bigbasket.py          ← BigBasket       ✅ ACTIVE (__NEXT_DATA__)
-│   │   ├── zepto.py              ← Zepto           ✅ ACTIVE (localStorage)
-│   │   ├── flipkart.py           ← Flipkart        ⏳ FUTURE (CSS unstable)
-│   │   ├── instamart.py          ← Swiggy Instamart ⏳ FUTURE (needs login)
-│   │   ├── manager.py            ← Runs all active scrapers, one Chrome
-│   │   └── delivery.py           ← Pincode → city → delivery time mapping
+│   ├── scraper/
+│   │   ├── base.py               ← BaseScraper + Chrome driver (cross-platform UA)
+│   │   ├── amazon.py             ← Amazon Fresh   ✅ Active
+│   │   ├── blinkit.py            ← Blinkit         ✅ Active
+│   │   ├── bigbasket.py          ← BigBasket        ✅ Active
+│   │   ├── zepto.py              ← Zepto            ✅ Active
+│   │   ├── flipkart.py           ← Flipkart         ⏳ Future
+│   │   ├── instamart.py          ← Swiggy Instamart ⏳ Future
+│   │   ├── manager.py            ← Orchestrates all scrapers
+│   │   └── delivery.py           ← Pincode → city mapping
 │   │
-│   ├── pipeline/                 ── PHASES 2 & 3 ────────────────────────
+│   ├── pipeline/
 │   │   ├── kafka_pipeline.py     ← Kafka producer + consumer
-│   │   │                           offset-snapshot anti-stale-message fix
-│   │   └── spark_processor.py    ← Rank · savings · ₹/unit
-│   │                               Real Spark 4.1.2 · Pandas fallback
+│   │   └── spark_processor.py    ← Rank · ₹/unit · Pandas fallback
 │   │
-│   └── database/                 ── PHASE 4 ─────────────────────────────
-│       └── db.py                 ← SQLite: searches + prices tables
+│   └── database/
+│       └── db.py                 ← SQLite storage
 │
-├── data/
-│   └── prices.db                 ← SQLite DB (auto-created on first run)
-│
-└── docs/
-    └── architecture/             ← System design docs
+└── data/
+    └── prices.db                 ← SQLite DB (auto-created on first run)
 ```
 
 ---
 
-## 🌐 Platform Status
+## 🌐 Active Platforms
 
-| Platform | Scraping Method | Status |
-|----------|----------------|--------|
-| **Amazon Fresh** | BeautifulSoup HTML card parse | ✅ Active |
-| **Blinkit** | Selenium + HTML price-walk | ✅ Active |
-| **BigBasket** | `__NEXT_DATA__` JSON extraction | ✅ Active |
-| **Zepto** | localStorage location injection | ✅ Active |
-| **Flipkart** | BeautifulSoup HTML | ⏳ Future — CSS class names change frequently |
-| **Swiggy Instamart** | Cookie location injection | ⏳ Future — requires Swiggy login session |
+| Platform | Method | Status |
+|----------|--------|--------|
+| **Amazon Fresh** | HTML card parse | ✅ Active |
+| **Blinkit** | Selenium + HTML | ✅ Active |
+| **BigBasket** | `__NEXT_DATA__` JSON | ✅ Active |
+| **Zepto** | localStorage injection | ✅ Active |
+| **Flipkart** | HTML | ⏳ Future |
+| **Swiggy Instamart** | Cookie injection | ⏳ Future |
 
 ---
 
 ## 📍 Supported Pincodes
 
-| City | Pincode Prefix | Example |
-|------|---------------|---------|
-| Bangalore | 560xxx, 562xxx | `560001` |
-| Delhi | 110xxx | `110001` |
-| Mumbai | 400xxx, 401xxx | `400001` |
-| Hyderabad | 500xxx | `500001` |
-| Chennai | 600xxx | `600001` |
-| Kolkata | 700xxx | `700001` |
-| Pune | 411xxx | `411001` |
-| Ahmedabad | 380xxx | `380001` |
-| Gurugram | 122xxx | `122001` |
-| Noida | 201xxx | `201301` |
-| Jaipur | 302xxx | `302001` |
-| Lucknow | 226xxx | `226001` |
-| Chandigarh | 160xxx | `160017` |
-| Indore | 452xxx | `452001` |
-
-Any unrecognised pincode uses tier-2 city delivery estimates.
-
----
-
-## 🗄️ Database Schema
-
-```sql
-CREATE TABLE searches (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    query        TEXT    NOT NULL,
-    pincode      TEXT    NOT NULL,
-    result_count INTEGER,
-    searched_at  TEXT
-);
-
-CREATE TABLE prices (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    search_id      INTEGER REFERENCES searches(id),
-    platform       TEXT,
-    product_name   TEXT,
-    brand          TEXT,
-    price          REAL,
-    mrp            REAL,
-    discount_pct   REAL,
-    size_label     TEXT,
-    price_per_unit REAL,
-    unit_norm      TEXT,
-    delivery_mins  INTEGER,
-    rank           INTEGER,
-    savings        REAL,
-    is_best_deal   INTEGER,
-    source         TEXT,        -- always "LIVE"
-    scraped_at     TEXT,
-    processed_at   TEXT,
-    pincode        TEXT
-);
-```
-
----
-
-## ⚡ Tech Stack
-
-| Layer | Technology | Version | Role |
-|-------|-----------|---------|------|
-| Scraping | Selenium + webdriver-manager | 4.x | Headless Chrome automation |
-| HTML parsing | BeautifulSoup4 + lxml | 4.12 | DOM traversal, price extraction |
-| Message queue | Apache Kafka (KRaft) | 3.9.2 | Real-time message streaming |
-| Kafka client | kafka-python | 2.0.2 | Python producer/consumer |
-| Stream processing | Apache Spark | 4.1.2 | Window functions, ranking |
-| Processing fallback | Pandas | 2.x | Same logic without JVM |
-| Storage | SQLite | built-in | Persistent search history |
-| Dashboard | Streamlit | 1.32+ | Interactive web UI |
-| Charts | Plotly Express | 5.x | Bar charts, visualisations |
-| Language | Python | 3.10+ | All pipeline components |
+| City | Prefix | Example |
+|------|--------|---------|
+| Bangalore | 560, 562 | `560001` |
+| Delhi | 110 | `110001` |
+| Mumbai | 400, 401 | `400001` |
+| Hyderabad | 500 | `500001` |
+| Chennai | 600 | `600001` |
+| Kolkata | 700 | `700001` |
+| Pune | 411 | `411001` |
+| Ahmedabad | 380 | `380001` |
+| Gurugram | 122 | `122001` |
+| Noida | 201 | `201301` |
+| Jaipur | 302 | `302001` |
+| Lucknow | 226 | `226001` |
+| Chandigarh | 160 | `160017` |
+| Indore | 452 | `452001` |
 
 ---
 
@@ -295,36 +346,59 @@ CREATE TABLE prices (
 
 ### Chrome not found
 ```bash
-# Selenium auto-downloads ChromeDriver via webdriver-manager
-# Make sure Google Chrome is installed on the system
+# webdriver-manager auto-downloads the right ChromeDriver
+# Just make sure Google Chrome is installed
 ```
 
 ### Kafka not connecting
 ```
-[Kafka] Broker not available — no broker running at localhost:9092
-→ Using in-memory pass-through (pipeline continues normally)
+[Kafka] Broker not available — using in-memory fallback
 ```
-The app works fine without Kafka — it uses in-memory JSON serialise/deserialise as fallback. To get real Kafka, follow Step 3 above.
+App works fine without Kafka. To fix: follow the Kafka setup steps above.
 
-### Spark not starting
+### Spark not starting (shows "Pandas fallback")
+Java 11+ must be installed and on PATH. Check with:
+```bash
+java -version
 ```
-Engine: Pandas (Spark fallback)
-```
-PySpark needs Java 11+. Install from [adoptium.net](https://adoptium.net) and set `JAVA_HOME`. The app works without it using Pandas.
+App still works — Pandas runs the same logic as Spark.
 
-### ₹ symbol shows as `?` on Windows
-```powershell
-$env:PYTHONIOENCODING = "utf-8"
-$env:PYTHONUTF8 = "1"
-streamlit run app.py
+### Mac: `permission denied` on start_app.sh
+```bash
+chmod +x start_app.sh
+./start_app.sh
 ```
-Or just use `START_APP.bat` which sets this automatically.
+
+### Windows: ₹ symbol shows as `?`
+Use `START_APP.bat` — it sets `PYTHONIOENCODING=utf-8` automatically.
+
+### Windows: `wmic` not recognised when starting Kafka
+Edit `kafka-server-start.bat` and replace the `wmic` block with:
+```bat
+set KAFKA_HEAP_OPTS=-Xmx1G -Xms1G
+```
+
+---
+
+## ⚙️ Tech Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| Scraping | Selenium + webdriver-manager | 4.x |
+| HTML parsing | BeautifulSoup4 + lxml | 4.12 |
+| Message queue | Apache Kafka (KRaft) | 3.9.2 |
+| Kafka client | kafka-python | 2.0.2 |
+| Processing | Apache Spark / Pandas | 4.x / 2.x |
+| Storage | SQLite | built-in |
+| Dashboard | Streamlit | 1.32+ |
+| Charts | Plotly Express | 5.x |
+| Language | Python | 3.10+ |
 
 ---
 
 ## ⚠️ Disclaimer
 
-This project is for **educational purposes** — demonstrating a real-time data engineering pipeline using industry-standard tools. Scraping websites may violate their Terms of Service. Use responsibly, respect rate limits, and do not run in a production or commercial environment.
+This project is for **educational purposes** — demonstrating a real-time data engineering pipeline using industry-standard tools. Scraping websites may violate their Terms of Service. Use responsibly and do not run in a production or commercial environment.
 
 ---
 
