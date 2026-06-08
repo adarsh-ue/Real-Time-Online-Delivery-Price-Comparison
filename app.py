@@ -24,7 +24,9 @@ st.set_page_config(
 from src.scraper          import ScraperManager
 from src.scraper.delivery import get_city
 from src.pipeline         import KafkaPipeline, SparkProcessor
-from src.database         import Database
+from src.database         import Database 
+
+from database_storage import DatabaseStorage
 
 # ── session state ─────────────────────────────────────────────────────────────
 _defaults = {
@@ -82,7 +84,11 @@ if go:
         term_box.code("\n".join(st.session_state.logs[-40:]), language="")
 
     log(f"▶  Query: '{q}'   Pincode: {pin}   City: {get_city(pin) or 'unknown'}")
-    log("=" * 62)
+    log("=" * 62) 
+
+    db_storage = DatabaseStorage(log_fn=log)
+    search_id  = db_storage.store_search(query=q, pincode=pin, city=get_city(pin))
+    log(f"💾  Search saved to DB → search_id={search_id}")
 
     # ── Phase 1 Progress Cards ─────────────────────────────────────────────────
     st.markdown("**🌐 Phase 1 — Live Scraping Progress (Selenium)**")
@@ -122,9 +128,13 @@ if go:
     st.session_state.raw_data        = raw_data
     st.session_state.platform_summary = platform_summary
 
+
     if not raw_data:
         log("❌  No data returned. Try another product or pincode.")
         st.error("No products found."); st.stop()
+
+    db_storage.store_raw_data(raw_data, search_id=search_id)
+    log(f"💾  Raw scraped data saved → {len(raw_data)} products")
 
     # Phase 2 — Kafka
     t0       = time.time()
