@@ -1,14 +1,10 @@
-import sqlite3
-import pandas as pd
+import os
 import joblib
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
+import pandas as pd
 
 
-DB_PATH = "data/prices.db"
 MODEL_PATH = "src/ml/best_deal_model.pkl"
+
+
+def model_exists():
+    return os.path.exists(MODEL_PATH)
