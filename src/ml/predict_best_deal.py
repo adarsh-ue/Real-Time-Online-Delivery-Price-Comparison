@@ -9,6 +9,7 @@ MODEL_PATH = "src/ml/best_deal_model.pkl"
 def model_exists():
     return os.path.exists(MODEL_PATH)
 
+
 def predict_best_deal(product):
     model = joblib.load(MODEL_PATH)
 
