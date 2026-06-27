@@ -127,6 +127,7 @@ if go:
     timings["⚙️  Phase 1 — Scraping (Selenium)"] = round(time.time() - t0, 2)
     st.session_state.raw_data        = raw_data
     st.session_state.platform_summary = platform_summary
+    log(f"Scraper returned {len(raw_data)} products")
 
 
     if not raw_data:
@@ -144,8 +145,33 @@ if go:
     st.session_state.kafka_meta = kpipeline.kafka_meta
 
     # Phase 3 — Spark / Pandas
+    # Phase 3 — Spark / Pandas
     t0 = time.time()
-    processed = SparkProcessor(log).process(mq_data)
+    processed = []
+    log("⚡  Waiting for pipeline_trigger to process data...")
+
+    # Poll processed_data table until results appear (max 60s)
+    import sqlite3
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grocery_prices.db")
+
+    for attempt in range(30):   # 30 × 2s = 60s timeout
+        time.sleep(2)
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = pd.read_sql_query(
+                "SELECT * FROM processed_data WHERE search_id = ?",
+                conn, params=(search_id,)
+            )
+            conn.close()
+            if not rows.empty:
+                processed = rows.to_dict(orient="records")
+                log(f"⚡  Spark results ready — {len(processed)} rows")
+                break
+        except Exception as e:
+            log(f"⚠️  Poll attempt {attempt+1} failed: {e}")
+    else:
+        log("⚠️  Timeout: pipeline_trigger didn't finish in 60s — showing empty results")
+
     timings["⚡  Phase 3 — Spark / Pandas (processing)"] = round(time.time() - t0, 2)
 
     # Phase 4 — SQLite
@@ -272,7 +298,7 @@ if st.session_state.searched:
                     row["Size"] = r.get("size_label") or "—"
                 if has_mrp:
                     mrp = r.get("mrp", 0)
-                    row["MRP (₹)"]  = mrp if mrp > r.get("price", 0) else "—"
+                    row["MRP (₹)"]  = f"₹{mrp:.0f}" if mrp > r.get("price", 0) else "—"
                     row["Discount"] = f"{disc:.0f}%" if disc > 0 else "—"
                 # Buy link — always present (direct URL or platform search fallback)
                 row["Buy"] = _product_link(r)
