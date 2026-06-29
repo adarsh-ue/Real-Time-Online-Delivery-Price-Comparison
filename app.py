@@ -369,7 +369,11 @@ if st.session_state.searched:
                     ascending=False
                 ).iloc[0]
 
-                clean_name = re.sub(r"(ADD|OFF)?₹\d+(\.\d+)?", "", str(top_deal['Product']))
+                clean_name = str(top_deal['Product'])
+                clean_name = re.sub(r"(ADD|OFF|Bestseller)", " ", clean_name)
+                clean_name = re.sub(r"₹\d+(\.\d+)?", "", clean_name)
+                clean_name = re.sub(r"\d+\.\d+\(\d+[\.\d]*k?\)", "", clean_name)
+                clean_name = re.sub(r"\(\d+[\.\d]*k?\)", "", clean_name)
                 clean_name = re.sub(r"\s+", " ", clean_name).strip()[:80]
                 buy_url = top_deal.get("_url", "")
 
