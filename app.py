@@ -350,6 +350,7 @@ if st.session_state.searched:
                     "Delivery mins": r.get("delivery_mins", 0),
                     "ML Best Deal": "Yes" if ml_result["prediction"] == 1 else "No",
                     "Confidence %": ml_result["confidence"],
+                    "_url": r.get("product_url", ""),
                 })
 
             ml_df = pd.DataFrame(ml_rows)
@@ -370,12 +371,15 @@ if st.session_state.searched:
 
                 clean_name = re.sub(r"(ADD|OFF)?₹\d+(\.\d+)?", "", str(top_deal['Product']))
                 clean_name = re.sub(r"\s+", " ", clean_name).strip()[:80]
+                buy_url = top_deal.get("_url", "")
 
                 st.success(
                     f"✅ ML Recommended Best Deal: "
                     f"{clean_name} from {top_deal['Platform']} "
                     f"with {top_deal['Confidence %']}% confidence"
                 )
+                if buy_url:
+                    st.markdown(f"[🛒 Buy Now — {top_deal['Platform']}]({buy_url})")
             else:
                 st.info("ML did not strongly classify any product as the best deal.")
 
