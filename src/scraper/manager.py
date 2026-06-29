@@ -77,6 +77,13 @@ class ScraperManager:
                 t0      = time.time()
                 results = scraper.scrape(query, driver, pincode=pincode,
                                          screenshot_dir=screenshot_dir)
+
+                if not results:
+                    self.log(f"  [{scraper.platform}] Retrying once...")
+                    time.sleep(2)
+                    results = scraper.scrape(query, driver, pincode=pincode,
+                                             screenshot_dir=screenshot_dir)
+
                 elapsed = round(time.time() - t0, 2)
 
                 # Stamp pincode on each record

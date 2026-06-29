@@ -17,7 +17,11 @@ Terminal shows which engine is running.
 
 import re
 import os
+import sys
 from datetime import datetime
+
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 from typing import List, Dict, Callable
 
 

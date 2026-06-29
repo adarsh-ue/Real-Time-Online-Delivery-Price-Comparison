@@ -24,7 +24,9 @@ st.set_page_config(
 from src.scraper          import ScraperManager
 from src.scraper.delivery import get_city
 from src.pipeline         import KafkaPipeline, SparkProcessor
-from src.database         import Database
+from src.database         import Database 
+
+from database_storage import DatabaseStorage
 
 # ── session state ─────────────────────────────────────────────────────────────
 _defaults = {
@@ -82,7 +84,11 @@ if go:
         term_box.code("\n".join(st.session_state.logs[-40:]), language="")
 
     log(f"▶  Query: '{q}'   Pincode: {pin}   City: {get_city(pin) or 'unknown'}")
-    log("=" * 62)
+    log("=" * 62) 
+
+    db_storage = DatabaseStorage(log_fn=log)
+    search_id  = db_storage.store_search(query=q, pincode=pin, city=get_city(pin))
+    log(f"💾  Search saved to DB → search_id={search_id}")
 
     # ── Phase 1 Progress Cards ─────────────────────────────────────────────────
     st.markdown("**🌐 Phase 1 — Live Scraping Progress (Selenium)**")
@@ -121,10 +127,15 @@ if go:
     timings["⚙️  Phase 1 — Scraping (Selenium)"] = round(time.time() - t0, 2)
     st.session_state.raw_data        = raw_data
     st.session_state.platform_summary = platform_summary
+    log(f"Scraper returned {len(raw_data)} products")
+
 
     if not raw_data:
         log("❌  No data returned. Try another product or pincode.")
         st.error("No products found."); st.stop()
+
+    db_storage.store_raw_data(raw_data, search_id=search_id)
+    log(f"💾  Raw scraped data saved → {len(raw_data)} products")
 
     # Phase 2 — Kafka
     t0       = time.time()
@@ -133,9 +144,11 @@ if go:
     timings["📨  Phase 2 — Kafka (message queue)"] = round(time.time() - t0, 2)
     st.session_state.kafka_meta = kpipeline.kafka_meta
 
-    # Phase 3 — Spark / Pandas
+    # Phase 3 — Spark / Pandas (inline processing, no external daemon needed)
     t0 = time.time()
-    processed = SparkProcessor(log).process(mq_data)
+    processor = SparkProcessor(log)
+    processed = processor.process(mq_data)
+
     timings["⚡  Phase 3 — Spark / Pandas (processing)"] = round(time.time() - t0, 2)
 
     # Phase 4 — SQLite
@@ -262,7 +275,7 @@ if st.session_state.searched:
                     row["Size"] = r.get("size_label") or "—"
                 if has_mrp:
                     mrp = r.get("mrp", 0)
-                    row["MRP (₹)"]  = mrp if mrp > r.get("price", 0) else "—"
+                    row["MRP (₹)"]  = f"₹{mrp:.0f}" if mrp > r.get("price", 0) else "—"
                     row["Discount"] = f"{disc:.0f}%" if disc > 0 else "—"
                 # Buy link — always present (direct URL or platform search fallback)
                 row["Buy"] = _product_link(r)
@@ -302,7 +315,70 @@ if st.session_state.searched:
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("⬇️  Download CSV", csv,
                                file_name=f"{q}_{pin}.csv", mime="text/csv")
+    # ── ML Prediction Section ─────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🤖 Machine Learning Prediction — Best Deal")
 
+    try:
+        from src.ml.predict_best_deal import predict_best_deal, model_exists
+
+        if not model_exists():
+            st.warning(
+                "ML model is not trained yet. Run: python src/ml/train_best_deal_model.py"
+            )
+        else:
+            ml_rows = []
+            for r in results:
+                product_input = {
+                    "platform": r.get("platform", ""),
+                    "product_name": r.get("product_name", ""),
+                    "price": r.get("price", 0),
+                    "mrp": r.get("mrp", 0),
+                    "discount_pct": r.get("discount_pct", 0),
+                    "price_per_unit": r.get("price_per_unit", 0),
+                    "delivery_mins": r.get("delivery_mins", 0),
+                    "savings": r.get("savings", 0),
+                }
+
+                ml_result = predict_best_deal(product_input)
+
+                ml_rows.append({
+                    "Product": r.get("product_name", ""),
+                    "Platform": r.get("platform", ""),
+                    "Price": r.get("price", 0),
+                    "Discount %": r.get("discount_pct", 0),
+                    "Delivery mins": r.get("delivery_mins", 0),
+                    "ML Best Deal": "Yes" if ml_result["prediction"] == 1 else "No",
+                    "Confidence %": ml_result["confidence"],
+                })
+
+            ml_df = pd.DataFrame(ml_rows)
+
+            st.dataframe(
+                ml_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            best_ml_deals = ml_df[ml_df["ML Best Deal"] == "Yes"]
+
+            if not best_ml_deals.empty:
+                top_deal = best_ml_deals.sort_values(
+                    by="Confidence %",
+                    ascending=False
+                ).iloc[0]
+
+                st.success(
+                    f"✅ ML Recommended Best Deal: "
+                    f"{top_deal['Product']} from {top_deal['Platform']} "
+                    f"with {top_deal['Confidence %']}% confidence"
+                )
+            else:
+                st.info("ML did not strongly classify any product as the best deal.")
+
+    except Exception as e:
+        st.error(f"ML prediction error: {e}")
+        
     # ── 3. Price Bar Chart ────────────────────────────────────────────────────
     with st.expander("📈 Price Comparison Chart", expanded=True):
         if not results:

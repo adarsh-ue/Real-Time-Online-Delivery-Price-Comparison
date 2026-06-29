@@ -38,7 +38,15 @@ class BigBasketScraper(BaseScraper):
         url = SEARCH_URL.format(query=query.replace(" ", "+"))
         self._get_page(driver, url,
                        wait_selector="[class*='SKUDeck'], li, [class*='product']",
-                       timeout=20)
+                       timeout=25)
+
+        # Scroll down to trigger lazy-loaded content
+        import time as _t
+        for _ in range(3):
+            driver.execute_script("window.scrollBy(0, 800)")
+            _t.sleep(0.5)
+        driver.execute_script("window.scrollTo(0, 0)")
+        _t.sleep(1)
 
         # ── Strategy 1: __NEXT_DATA__ JSON ────────────────────────────────────
         nd = self._next_data(driver)

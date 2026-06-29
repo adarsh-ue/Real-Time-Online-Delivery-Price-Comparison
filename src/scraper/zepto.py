@@ -92,7 +92,7 @@ class ZeptoScraper(BaseScraper):
         url = SEARCH_URL.format(query=query.replace(" ", "+"))
         self.log(f"  [Zepto] → {url}")
         driver.get(url)
-        time.sleep(8)   # Zepto React hydration takes longer than most sites
+        time.sleep(10)
 
         # Re-inject location after page load (Next.js might reset localStorage)
         driver.execute_script(
@@ -101,7 +101,14 @@ class ZeptoScraper(BaseScraper):
         )
         # Reload once more so React picks up the injected location
         driver.get(url)
-        time.sleep(6)
+        time.sleep(8)
+
+        # Scroll to trigger lazy-loaded product cards
+        for _ in range(3):
+            driver.execute_script("window.scrollBy(0, 600)")
+            time.sleep(0.5)
+        driver.execute_script("window.scrollTo(0, 0)")
+        time.sleep(1)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         results = self._parse(soup)
