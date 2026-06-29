@@ -52,18 +52,30 @@ class SparkProcessor:
     # PRIVATE: Get or create SparkSession (local mode)
     # ──────────────────────────────────────────────────────────────────────────
     def _get_spark(self) -> SparkSession:
-        spark = (
-            SparkSession.builder
-            .appName("GroceryPricePipeline")
-            .master("local[*]")
-            .config("spark.sql.shuffle.partitions", "4")
-            .config("spark.ui.enabled", "false")
-            .config("spark.driver.memory", "1g")
-            .config("spark.driver.extraJavaOptions", "-XX:+IgnoreUnrecognizedVMOptions --add-opens=java.base/sun.security.action=ALL-UNNAMED -Dlog4j.logLevel=ERROR")
-            .config("spark.executor.extraJavaOptions", "-XX:+IgnoreUnrecognizedVMOptions --add-opens=java.base/sun.security.action=ALL-UNNAMED")
-            .getOrCreate()
-        )
-        spark.sparkContext.setLogLevel("ERROR")
+        _out_fd = os.dup(1)
+        _err_fd = os.dup(2)
+        _devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(_devnull, 1)
+        os.dup2(_devnull, 2)
+        try:
+            spark = (
+                SparkSession.builder
+                .appName("GroceryPricePipeline")
+                .master("local[*]")
+                .config("spark.sql.shuffle.partitions", "4")
+                .config("spark.ui.enabled", "false")
+                .config("spark.driver.memory", "1g")
+                .config("spark.driver.extraJavaOptions", "-XX:+IgnoreUnrecognizedVMOptions --add-opens=java.base/sun.security.action=ALL-UNNAMED -Dlog4j.logLevel=ERROR")
+                .config("spark.executor.extraJavaOptions", "-XX:+IgnoreUnrecognizedVMOptions --add-opens=java.base/sun.security.action=ALL-UNNAMED")
+                .getOrCreate()
+            )
+            spark.sparkContext.setLogLevel("ERROR")
+        finally:
+            os.dup2(_out_fd, 1)
+            os.dup2(_err_fd, 2)
+            os.close(_out_fd)
+            os.close(_err_fd)
+            os.close(_devnull)
         return spark
 
     # ──────────────────────────────────────────────────────────────────────────

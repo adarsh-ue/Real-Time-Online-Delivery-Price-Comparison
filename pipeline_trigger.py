@@ -24,7 +24,12 @@ Architecture:
 import sqlite3
 import time
 import os
+import sys
 from datetime import datetime
+
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+
 from spark_processor import SparkProcessor
 
 # ── Config ────────────────────────────────────────────────────────────────────

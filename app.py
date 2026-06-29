@@ -368,9 +368,12 @@ if st.session_state.searched:
                     ascending=False
                 ).iloc[0]
 
+                clean_name = re.sub(r"(ADD|OFF)?₹\d+(\.\d+)?", "", str(top_deal['Product']))
+                clean_name = re.sub(r"\s+", " ", clean_name).strip()[:80]
+
                 st.success(
                     f"✅ ML Recommended Best Deal: "
-                    f"{top_deal['Product']} from {top_deal['Platform']} "
+                    f"{clean_name} from {top_deal['Platform']} "
                     f"with {top_deal['Confidence %']}% confidence"
                 )
             else:
